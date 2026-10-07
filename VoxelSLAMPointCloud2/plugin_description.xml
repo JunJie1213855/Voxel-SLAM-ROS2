@@ -1,0 +1,11 @@
+<library path="voxelslam_pointcloud2">
+  <class name="voxelslam_pointcloud2/VoxelSLAMPointCloud2"
+         type="voxelslam_pointcloud2::PointCloud2Display"
+         base_class_type="rviz_common::Display">
+    <description>
+      Displays sensor_msgs/PointCloud2 messages like the default PointCloud2 display, but clears
+      the accumulated point cloud map automatically upon receiving an empty point cloud.
+    </description>
+    <message_type>sensor_msgs/msg/PointCloud2</message_type>
+  </class>
+</library>
