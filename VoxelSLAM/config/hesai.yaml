@@ -32,7 +32,7 @@ voxelslam:
       dept_err: 0.01
       beam_err: 0.01 # 0.01
       # indoor: 0.5-1, high speed: 2, high altitude: 4
-      voxel_size: 1 # 2
+      voxel_size: 1.0 # 2
       # The plane criterion
       min_eigen_value: 0.0025
       # The number of degenrate scans to make the system reset
@@ -59,7 +59,7 @@ voxelslam:
       # It can be adjusted according to the environment
       jud_default: 0.5 # 0.22 0.34
       # The criterion for ICP to ensure the success of two scans matching
-      icp_eigval: 10 # 8
+      icp_eigval: 10.0 # 8
       # The threshold for the ratio of drift and travelling distance
       ratio_drift: 0.01
       curr_halt: 10
