@@ -1,4 +1,4 @@
-# Voxel-SLAM: A Complete, Accurate, and Versatile LiDAR-Inertial SLAM System
+# Voxel-SLAM (ROS 2)
 
 ## 1. Introduction
 
@@ -7,228 +7,292 @@
 <div align="center">
     <a href="https://youtu.be/Cg9W01aIUzE" target="_blank">
     <img src="./figure/systemoverview.png" width = 60% >
+    </a>
 </div>
-
-### 1.1 Related Video
 
 The video of **Voxel-SLAM** is available on [YouTube](https://youtu.be/Cg9W01aIUzE).
 
----
-
-### 🚀 Recent Updates (ROS 2 Offline Bag Processing)
-The system has been heavily upgraded to support **ROS 2 native offline bag parsing (`rosbag2_cpp`)**. Instead of manually playing bags and risking message loss or synchronization problems, `Voxel-SLAM` now:
-1. **Directly Parses `rosbag2` Files**: PointCloud and IMU messages are extracted seamlessly offline. Message speeds remain exactly as originally recorded using multi-threaded synchronization.
-2. **Launch Parameters Overrides**: You can now inject arguments (e.g., `lid_topic`, `bag_path`, `bagname`) directly via `ros2 launch` without modifying the global config file format.
-3. **Automated Finalization & Map Saving**: Upon finishing the playback of the bag, the system will *automatically* trigger the `finish` sequence, compute global mapping (GBA), save the resulting offline map (if enabled), and cleanly terminate RViz along with the node.
-
-**How to use the dynamic launch arguments:**
-```bash
-ros2 launch voxel_slam vxlm_robosense.launch.py \
-    lid_topic:=/sensing/lidar/corrected/front_left/points_cropped \
-    bag_path:=/absolute/path/to/rosbag_dir \
-    bagname:=my_test_run
-```
-
----
-
-### 1.2 Related works
-The system has been heavily upgraded to support **ROS 2 native offline bag parsing (`rosbag2_cpp`)**. Instead of manually playing bags and risking message loss or synchronization problems, `Voxel-SLAM` now:
-1. **Directly Parses `rosbag2` Files**: PointCloud and IMU messages are extracted seamlessly offline. Message speeds remain exactly as originally recorded using multi-threaded synchronization.
-2. **Launch Parameters Overrides**: You can now inject arguments (e.g., `lid_topic`, `bag_path`, `bagname`) directly via `ros2 launch` without modifying the global config file format.
-3. **Automated Finalization & Map Saving**: Upon finishing the playback of the bag, the system will *automatically* trigger the `finish` sequence, compute global mapping (GBA), save the resulting offline map (if enabled), and cleanly terminate RViz along with the node.
-
-**How to use the dynamic launch arguments:**
-```bash
-ros2 launch voxel_slam vxlm_robosense.launch.py \
-    lid_topic:=/sensing/lidar/corrected/front_left/points_cropped \
-    bag_path:=/absolute/path/to/rosbag_dir \
-    bagname:=my_test_run
-```
-
----
-
-### 1.2 Related works
-
-Related paper is available on [**arxiv**](https://arxiv.org/abs/2410.08935).
-
-### 1.3 Competitions
+Related paper is available on [**arXiv**](https://arxiv.org/abs/2410.08935).
 
 Voxel-SLAM has been served as a subsystem to participate in [ICRA HILTI 2023 SLAM Challenge](https://hilti-challenge.com/leader-board-2023.html) (**2nd** place on the LiDAR single-session) and [ICCV 2023 SLAM Challenge](https://superodometry.com/iccv23_challenge_LiI) (**1st** place on the LiDAR inertial track).
 
-## 2. Prerequisited
+---
 
-Ubuntu=22.04. [ROS 2 = Humble](https://docs.ros.org/en/humble/Installation.html). [PCL=1.12](https://pointclouds.org/). [Eigen=3.4](https://eigen.tuxfamily.org/index.php?title=Main_Page)
+## 2. About this ROS 2 port
 
-[GTSAM>=4.2](https://github.com/borglab/gtsam/releases) (the `ros-humble-gtsam` package works)
+This repository is a **ROS 2 (Humble)** port of the original ROS 1 code base. It is a full ament
+workspace and no longer contains any ROS 1 (catkin/roscpp) code, launch files or tooling.
 
-[livox_ros_driver2](https://github.com/Livox-SDK/livox_ros_driver2) (only needed for Livox LiDARs)
+The port is **offline-first**: instead of playing a rosbag alongside a live subscriber, the node
+reads a `rosbag2` directory directly (`rosbag2_cpp`), reproduces the original message timing, and
+then runs the regular SLAM pipeline.
 
-Additional ROS 2 packages required by this workspace:
+### 2.1 What the port changes
 
-```
+| Area | Original (ROS 1) | Here (ROS 2) |
+|---|---|---|
+| Build | `catkin_make` | `colcon build`, `ament_cmake`, package format 3 |
+| Middleware | `roscpp`, `ros::NodeHandle` | `rclcpp`, `rclcpp::Node` |
+| Parameters | `nh.param` + `rosparam` | declared ROS 2 parameters from YAML / launch |
+| Data input | live topics, `rosbag play` | offline `rosbag2_cpp` reader, no `rosbag play` needed |
+| RViz plugin | `rviz::Display` (RViz 1) | `rviz_common::Display` (RViz 2) |
+| Finalization | `rosparam set finish true` | triggered automatically at end of bag, or `ros2 param set` |
+
+### 2.2 Fixes applied on top of the port
+
+The port itself had several defects; these are fixed here and are worth knowing about:
+
+* **Livox IMU gravity scaling was missing (`ekf_imu.hpp`).** Livox IMU reports linear acceleration
+  in **g**, not m/s². The upstream code scales it with `scale_gravity = G_m_s2` when
+  `imu_topic == "/livox/imu"`; that line was lost during the port, leaving `scale_gravity = 1.0`.
+  Gravity was then estimated ~20× too small and **initialization never converged** — the whole bag
+  would play through with zero odometry output. Restored.
+* **Livox LiDAR support was missing entirely.** The `LID_TYPE` enum had no `LIVOX` entry, so the
+  shipped Livox configs (`lidar_type: 0`) fell into `default:` and exited with `Lidar Type Error`.
+  The enum numbering now matches upstream (`LIVOX=0`), a `livox_handler` was added, and the bag
+  reader converts `livox_ros_driver2/msg/CustomMsg` into a `PointCloud2` transparently.
+* **The bag reader only understood `sensor_msgs/msg/PointCloud2`.** It now looks up the recorded
+  topic type and deserializes `CustomMsg` or `PointCloud2` accordingly. Feeding one into the other
+  silently produced garbage points rather than an error.
+* **Node name mismatch.** The node was created as `cmn_voxel` while launch files and YAML used
+  `voxelslam`, so parameters only loaded via a `__node:=` remap. Renamed to `voxelslam`.
+* **Missing extrinsics caused a segfault.** `extrinsic_tran` / `extrinsic_rota` defaulted to empty
+  vectors and were indexed unguarded. They now default to zero translation / identity rotation and
+  are validated with a clear error message.
+* **A bad bag path aborted the process.** `rosbag2_cpp::Reader::open()` throws, and on the worker
+  thread that called `std::terminate`. It is now caught, reported, and unwinds the run cleanly.
+* **The RViz configs referenced plugins that do not exist in Humble.** `rviz_default_plugins/Group`
+  (a container holding several point-cloud displays) and `rviz_common/ToolProperties` (Humble spells
+  it `Tool Properties`) both failed to load, silently dropping displays. Fixed in `back.rviz` and
+  `back_voxel.rviz`.
+* **`voxelslam_pointcloud2` was ported to RViz 2**, including the `pluginlib_export_plugin_description_file`
+  registration that ROS 2 requires for plugin discovery.
+
+---
+
+## 3. Prerequisites
+
+* Ubuntu 22.04
+* [ROS 2 Humble](https://docs.ros.org/en/humble/Installation.html)
+* [PCL 1.12](https://pointclouds.org/)
+* [Eigen 3.4](https://eigen.tuxfamily.org/index.php?title=Main_Page)
+* [GTSAM ≥ 4.2](https://github.com/borglab/gtsam/releases) — the `ros-humble-gtsam` package works
+* [livox_ros_driver2](https://github.com/Livox-SDK/livox_ros_driver2) — **required**, provides the
+  `livox_ros_driver2/msg/CustomMsg` type. Build it in its own workspace and source it before building
+  this one.
+
+ROS 2 dependencies:
+
+```bash
 sudo apt install ros-humble-rviz2 ros-humble-rviz-common ros-humble-rviz-default-plugins \
                  ros-humble-rosbag2-cpp ros-humble-pcl-conversions \
                  ros-humble-tf2 ros-humble-tf2-ros ros-humble-tf2-eigen \
-                 ros-humble-tf2-geometry-msgs ros-humble-tf2-sensor-msgs
+                 ros-humble-tf2-geometry-msgs ros-humble-tf2-sensor-msgs \
+                 ros-humble-pluginlib qtbase5-dev
 ```
 
-## 3. Build
+---
 
-```
+## 4. Build
+
+```bash
 mkdir -p ~/voxelslam_ws/src
 cd ~/voxelslam_ws/src
 git clone <this repo>
+
+# livox_ros_driver2 must be discoverable for the CustomMsg headers
+source /path/to/livox_ws/install/setup.bash
+
 cd ~/voxelslam_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-Both packages in this repository are ROS 2 (ament) packages:
+This workspace contains two ROS 2 packages:
 
-* `voxel_slam` — the SLAM system itself (executable `voxel_slam` / node `voxelslam`).
-* `voxelslam_pointcloud2` — the custom RViz2 display plugin that clears the accumulated map when it
-  receives an empty point cloud.
+* **`voxel_slam`** — the SLAM system. Executable `voxelslam`, node name `voxelslam`.
+* **`voxelslam_pointcloud2`** — the custom RViz2 display plugin (see section 6).
 
-## 4. Run Voxel-SLAM
+---
 
-### 4.1 Livox Avia
+## 5. Run
 
-The online relocalization experiment rosbag. Download: [Onedrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/ErEznhkJzTxJiLuJ8AQDGS0BvCy6KsuaWF2D6cnx061GEQ?e=dMRSlf) ([Google Drive](https://drive.google.com/file/d/1LG46i0vreQrMZRap5tJkjKK4IX0t0zfC/view?usp=drive_link))
+### 5.1 General usage
 
-```
-ros2 launch voxel_slam vxlm_avia.launch.py
-// Using the "--pause" guarantees the bag benning time are the same in different runs
-// Press the Space to start
-rosbag play compus_elevator.bag --pause 
-```
+The node reads a **`rosbag2` directory** (a folder containing `metadata.yaml` and a `.db3` file),
+not a ROS 1 `.bag`. Pass it with `bag_path`:
 
-In the elevator, the system continues to restart until stepping out of the evevator. The blue point cloud is the map from initialization.
+```bash
+source /opt/ros/humble/setup.bash
+source /path/to/livox_ws/install/setup.bash          # if using a Livox LiDAR
+source ~/voxelslam_ws/install/setup.bash
 
-After the rosbag is done, your may find the map is inconsistent as shown in the video. Run
-
-```
-rosparam set finish true
+ros2 launch voxel_slam vxlm_mid360.launch.py \
+    bag_path:=/absolute/path/to/rosbag2_dir \
+    bagname:=my_test_run
 ```
 
-to launch the final global mapping (global bundle adjustment) to refine the global map.
+Available launch files — one per LiDAR, each with `bag_path`, `bagname`, `lid_topic` and `rviz`
+arguments:
 
-### 4.2 HILTI 2023 (Multi-Session)
+| LiDAR | Launch file | `lidar_type` |
+|---|---|---|
+| Livox Avia | `vxlm_avia.launch.py` | 0 |
+| Livox Mid360 | `vxlm_mid360.launch.py` | 0 |
+| Livox Avia (flying) | `vxlm_avia_fly.launch.py` | 0 |
+| Velodyne | `vxlm_velodyne.launch.py` | 1 |
+| Ouster | `vxlm_ouster.launch.py` | 2 |
+| Hesai | `vxlm_hesai.launch.py` | 3 |
+| RoboSense | `vxlm_robosense.launch.py` | 4 |
 
-The multi-session experiment rosbag. 
+Arguments are injected as parameter overrides, so **you never need to edit the YAML**:
 
-For quick test to download: [Onedrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/Epp5AQ2Oq1VNhC6MIuCAtN4BJC9jx9VvuVx7VT_cdlvD0A?e=8mXYdc). The whole rosbags of HILTI 2022 and 2023 are on the [website](https://hilti-challenge.com/index.html).
-
-The rosbag had better be played from "site1_handheld_5" to "site_handheld_1", or the "site_handheld_2" and "site_handheld_3" cannot find the loop. 
-
-Before launching, please set configure the variables in "hesai.yaml". The '#' means annotation
-
+```bash
+ros2 launch voxel_slam vxlm_robosense.launch.py \
+    lid_topic:=/sensing/lidar/corrected/front_left/points_cropped \
+    bag_path:=/absolute/path/to/rosbag_dir \
+    bagname:=my_test_run \
+    rviz:=false                     # headless, no RViz
 ```
-# hesai.yaml
-save_path: "${YOUR_FILE_PATH_TO_SAVE_THE_OFFLINE_MAP}"
-previous_map: "# site1_handheld_5: 0.50, 
+
+At the end of the bag the node **automatically** triggers the `finish` sequence, runs the global
+bundle adjustment (GBA), saves the map if `is_save_map` is enabled, and then shuts down the launch
+(including RViz). To trigger it manually mid-run:
+
+```bash
+ros2 param set /voxelslam finish true
+```
+
+> **ROS 1 bags must be converted first.** A `.bag` file cannot be read by this node. Convert it, e.g.
+> with [`rosbags-convert`](https://ternaris.gitlab.io/rosbags/topics/rosbags_convert.html)
+> (note: the source must be passed with `--src`, there is no positional form):
+> ```bash
+> pip install rosbags
+> rosbags-convert --src my_recording.bag --dst my_recording_ros2/
+> ```
+
+### 5.2 Configuration
+
+Sensor parameters live in `Voxel_Slam_ROS2/VoxelSLAM/config/<sensor>.yaml`. The `General` section is
+the one you are most likely to touch:
+
+```yaml
+General:
+  lid_topic: "/livox/lidar"
+  imu_topic: "/livox/imu"
+  save_path: "/path/to/save/"     # only used when is_save_map: 1
+  bagname: "my_test_run"
+  lidar_type: 0
+  blind: 0.5
+  point_filter_num: 3
+  extrinsic_tran: [-0.011, -0.02329, 0.04412]              # LiDAR -> IMU translation
+  extrinsic_rota: [1,0,0, 0,1,0, 0,0,1]                    # row-major rotation
+  is_save_map: 0
+```
+
+`extrinsic_tran` must have 3 elements and `extrinsic_rota` 9; the node validates this and exits with
+a message if they are wrong.
+
+---
+
+## 6. Datasets
+
+> All downloads below are the **original ROS 1 `.bag` files** from the upstream project. Convert them
+> to `rosbag2` (section 5.1) before use, or record your own with the sensor driver.
+
+### 6.1 Livox Avia — online relocalization
+
+Download: [OneDrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/ErEznhkJzTxJiLuJ8AQDGS0BvCy6KsuaWF2D6cnx061GEQ?e=dMRSlf) ([Google Drive](https://drive.google.com/file/d/1LG46i0vreQrMZRap5tJkjKK4IX0t0zfC/view?usp=drive_link))
+
+```bash
+ros2 launch voxel_slam vxlm_avia.launch.py bag_path:=/path/to/compus_elevator
+```
+
+In the elevator, the system continues to restart until stepping out of the elevator. The blue point
+cloud is the map from initialization. Afterwards run the GBA (section 5.1) to refine the global map.
+
+### 6.2 HILTI 2023 — multi-session
+
+Download: [OneDrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/Epp5AQ2Oq1VNhC6MIuCAtN4BJC9jx9VvuVx7VT_cdlvD0A?e=8mXYdc) (quick test); full HILTI 2022/2023 rosbags on the [website](https://hilti-challenge.com/index.html).
+
+Play the sessions in order from `site1_handheld_5` to `site1_handheld_1`; otherwise
+`site_handheld_2` and `site_handheld_3` cannot find the loop.
+
+Set the following in `hesai.yaml` before each run (`#` marks a commented-out entry):
+
+```yaml
+save_path: "/path/to/save/"
+previous_map: "# site1_handheld_5: 0.50,
                # site1_handheld_4: 0.45,
                # site1_handheld_3: 0.30,
                # site1_handheld_2: 0.50"
-bagname: "site1_handheld_${1-5}" # The rosbag name you play
-is_save_map: 1 # Enable to save the map
+bagname: "site1_handheld_5"
+is_save_map: 1
 ```
 
-```
-ros2 launch voxel_slam vxlm_hesai.launch.py
-rosbag play site1_handheld_5.bag --pause
-```
+Run each session with the same launch file, pointing `bag_path` at the corresponding bag:
 
-```
-ros2 launch voxel_slam vxlm_hesai.launch.py // Load the site_handheld_5
-rosbag play site1_handheld_4.bag --pause
+```bash
+ros2 launch voxel_slam vxlm_hesai.launch.py bag_path:=/path/to/site1_handheld_5
 ```
 
-```
-ros2 launch voxel_slam vxlm_hesai.launch.py // Load the site_handheld_{5, 4}
-rosbag play site1_handheld_3.bag --pause
-```
+For `site1_handheld_2` onwards, **uncomment the maps you want to load** in `previous_map` — e.g. for
+the fourth run the entry should list `site1_handheld_5`, `4` and `3`, leaving `2` commented out. Run
+the GBA at the end to get a consistent global map.
 
-For the "site1_handheld_2", do not forget load the offline maps. The "hesai.yaml" should be like this
+### 6.3 MARS dataset
 
-```
-# hesai.yaml
-save_path: "${YOUR_FILE_PATH_TO_SAVE_THE_OFFLINE_MAP}"
-previous_map: "site1_handheld_5: 0.50, 
-               site1_handheld_4: 0.45,
-               site1_handheld_3: 0.30,
-               # site1_handheld_2: 0.50"
-bagname: "site1_handheld_2" # The rosbag name you play
-is_save_map: 1 # Enable to save the map
+Download: [OneDrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/EpjsGW6coYlMvBWo8TlgJXoBttAuoocLi24V6kw-r_3A8w?e=vVB6RY) (quick test); full MARS rosbags on the [website](https://mars.hku.hk/dataset.html).
+
+```bash
+ros2 launch voxel_slam vxlm_avia_fly.launch.py bag_path:=/path/to/HKisland03
 ```
 
-```
-ros2 launch voxel_slam vxlm_hesai.launch.py // Load the site_handheld_{5, 4, 3}
-rosbag play site1_handheld_2.bag --pause
-```
+The beginning of the point cloud is empty and initialization fails until the drone reaches a certain
+height — this is expected. For `AMvalley03` this sequence finds loops only with difficulty; run the
+GBA to ensure global map consistency.
 
-```
-ros2 launch voxel_slam vxlm_hesai.launch.py // Load the site_handheld_{5, 4, 3, 2}
-rosbag play site1_handheld_1.bag --pause
-```
+### 6.4 Livox Mid360
 
-The map may not be consistent as shown in the video. Run
+Download: [OneDrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/ErtuXCFhFrBErZxzS5vLASkBJEfgDB9R2CSCgKe8BwhneQ?e=zbr7NL)
 
-```
-rosparam set finish true
-```
-
-for the final global BA.
-
-### 4.3 MARS Dataset
-
-For quick test to download: [Onedrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/EpjsGW6coYlMvBWo8TlgJXoBttAuoocLi24V6kw-r_3A8w?e=vVB6RY). The whole rosbags of MARS dataset are on the [website](https://mars.hku.hk/dataset.html).
-
-```
-ros2 launch voxel_slam vxlm_avia_fly.launch.py
-rosbag play HKisland03.bag --pause
-```
-
-The beginning of the point cloud is empty and failing to initialize until the drone at a certain height.
-
-```
-ros2 launch voxel_slam vxlm_avia_fly.launch.py
-rosbag play AMvalley03.bag --pause
-rosparam set finish true
-```
-
-This sequence is difficult to find loop. Please run the GBA to ensure the global map consistence.
-
-### 4.4 Livox Mid360
-
-The rosbag begin in a violent speed: [Onedrive](https://1drv.ms/f/c/8b1ef18ae4181c8d/ErtuXCFhFrBErZxzS5vLASkBJEfgDB9R2CSCgKe8BwhneQ?e=zbr7NL)
-
-Livox publishes its own `livox_ros_driver2/msg/CustomMsg` point format rather than
-`sensor_msgs/msg/PointCloud2`. This is handled transparently: the bag reader detects the recorded
-type and converts it, so a rosbag2 directory can be passed straight in:
-
-```
+```bash
 ros2 launch voxel_slam vxlm_mid360.launch.py \
-    bag_path:=/path/to/rosbag2_dir \
+    bag_path:=/path/to/jungle_challenge \
     bagname:=jungle_challenge
 ```
 
-Note that a **ROS 2 (rosbag2) recording** is required — the old ROS 1 `.bag` file must be converted
-first (e.g. with `rosbags-convert`). The Livox configs (`mid360.yaml`, `avia.yaml`, `avia_fly.yaml`)
-use `lidar_type: 6`; `1..5` are Velodyne/Ouster/Hesai/RoboSense/TartanAir.
+The bag begins at a violent speed, so initialization may take a while to converge. Live rosbag2
+recordings from `livox_ros_driver2` publish `/livox/lidar` as `CustomMsg` rather than `PointCloud2`;
+the reader detects the recorded type and converts it (including the per-point offset time used for
+de-skewing), so nothing extra is required on your side.
 
-### 4.5 Others
+### 6.5 Others
 
 Other types of LiDAR will be released later.
 
-## 5. VoxelSLAMPointCloud2
+---
 
-**VoxelSLAMPointCloud2**: A customized plugin for RViz2. It has the same usage to original "PointCloud2" in RViz2, but it can **clear the point cloud map automatically** when receiving an empty point cloud, with any **Decay Time** of the plugin. 
+## 7. VoxelSLAMPointCloud2 (RViz plugin)
 
-(1) Put the "VoxelSLAMPointCloud2" package within the same "src" folder of your ROS 2 workspace and
-`colcon build` it. The package registers itself with `pluginlib` against the `rviz_common`
-category, so no manual plugin registration is needed.
+**VoxelSLAMPointCloud2** is a customized RViz2 display. It behaves like the stock "PointCloud2"
+display, but **clears the accumulated point cloud map automatically** when it receives an empty point
+cloud, regardless of the configured **Decay Time**.
 
-(2) `ros2 launch` your program with RViz2 (this repository's launch files already start `rviz2`).
+* It is built as part of this workspace — no manual registration needed. The package registers itself
+  with `pluginlib` against the `rviz_common` category.
+* The launch files already start `rviz2` with `back.rviz`, which uses this plugin.
+* To add it manually: RViz2 → "Add" → `voxelslam_pointcloud2/VoxelSLAMPointCloud2`.
 
-(3) In RViz2 click "Add" and pick "voxelslam_pointcloud2/VoxelSLAMPointCloud2".
+---
 
+## 8. Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `Lidar Type Error` then exit | `lidar_type` in the YAML does not match the sensor. See the table in 5.1. |
+| `No storage could be initialized from the inputs` | `bag_path` is not a valid rosbag2 directory (missing `metadata.yaml`), or it points at a ROS 1 `.bag`. Convert it first. |
+| Parameters seem ignored | The node must be named `voxelslam` (the top-level YAML key). `ros2 run` without the launch file needs `-r __node:=voxelslam`. |
+| `Error: invalid LiDAR-IMU extrinsics` | `extrinsic_tran` needs 3 values, `extrinsic_rota` 9. |
+| Initialization never converges (no odometry output, `scale_gravity: 1.000000` in the log) | Livox IMU gravity scaling is not applied — see fix in 2.2. `scale_gravity` should read `9.800000`. |
+| RViz reports `failed to load` for a display class | Stale config from a different RViz version; `back.rviz` / `back_voxel.rviz` in this repo are already fixed for Humble. |

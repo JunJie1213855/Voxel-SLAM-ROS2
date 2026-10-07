@@ -17,7 +17,22 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz'
         ),
-        
+        DeclareLaunchArgument(
+            'lid_topic',
+            default_value='/livox/lidar',
+            description='Lidar topic'
+        ),
+        DeclareLaunchArgument(
+            'bag_path',
+            default_value='',
+            description='Path to the rosbag2 directory to process'
+        ),
+        DeclareLaunchArgument(
+            'bagname',
+            default_value='compus_elevator',
+            description='Name of the bag, used for saving outputs'
+        ),
+
         Node(
             package='voxel_slam',
             executable='voxelslam',
@@ -25,7 +40,12 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 config_file,
-                {'finish': False}
+                {
+                    'finish': False,
+                    'General.lid_topic': LaunchConfiguration('lid_topic'),
+                    'General.bag_path': LaunchConfiguration('bag_path'),
+                    'General.bagname': LaunchConfiguration('bagname'),
+                }
             ]
         ),
         
